@@ -31,6 +31,7 @@ const MAX_PLAYLIST_SONGS   = 50;
 // ── Env validation ───────────────────────────────────────────────────────────
 
 const { TOKEN, CLIENT_ID, GUILD_ID, PROXY_URL } = process.env;
+const YTDLP_BIN = process.env.YTDLP_PATH || 'yt-dlp';
 
 if (!TOKEN || !CLIENT_ID || !GUILD_ID) {
     console.error('Erro: TOKEN, CLIENT_ID e GUILD_ID devem estar configurados no .env');
@@ -142,7 +143,8 @@ function getAudioStream(url) {
     if (PROXY_URL) ytdlpArgs.push('--proxy', PROXY_URL);
     ytdlpArgs.push(url);
 
-    const ytdlp = spawn('yt-dlp', ytdlpArgs, { stdio: ['ignore', 'pipe', 'ignore'] });
+    const ytdlp = spawn(YTDLP_BIN, ytdlpArgs, { stdio: ['ignore', 'pipe', 'ignore'] });
+    ytdlp.on('error', () => {}); // ENOENT treated downstream via ffmpeg closing
 
     const ffmpeg = spawn(ffmpegPath, [
         '-i', 'pipe:0',
@@ -185,8 +187,7 @@ function fetchPlaylistVideos(url) {
         if (PROXY_URL) ytdlpArgs.push('--proxy', PROXY_URL);
         ytdlpArgs.push(url);
 
-        const ytdlp = spawn('yt-dlp', ytdlpArgs, { stdio: ['ignore', 'pipe', 'ignore'] });
-
+        const ytdlp = spawn('yt-dlp', ytdlpArgs, { stdio: ['ignore', 'pipe', 'ignore'] });        ytdlp.on('error', (err) => reject(new Error(`yt-dlp não encontrado: ${err.message}`)));
         let buf = '';
         ytdlp.stdout.on('data', d => { buf += d; });
         ytdlp.on('close', (code) => {
