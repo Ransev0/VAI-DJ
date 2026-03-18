@@ -1,0 +1,20 @@
+{
+  "name": "vai-dj",
+  "version": "3.0.0",
+  "description": "Bot de música para Discord — stream direto do YouTube",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=20.18.1"
+  },
+  "dependencies": {
+    "@discordjs/voice": "^0.19.2",
+    "discord.js": "^14.14.1",
+    "dotenv": "^16.6.1",
+    "ffmpeg-static": "5.2.0",
+    "opusscript": "^0.0.8",
+    "play-dl": "^1.9.7"
+  }
+}

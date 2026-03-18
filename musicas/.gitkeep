@@ -1,0 +1,3 @@
+# Este arquivo mantém a pasta musicas/ no Git
+# Arquivos MP3 nesta pasta são ignorados pelo .gitignore
+# mas a pasta em si é necessária para o funcionamento do bot
