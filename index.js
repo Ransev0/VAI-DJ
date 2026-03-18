@@ -31,7 +31,16 @@ const MAX_PLAYLIST_SONGS   = 50;
 // ── Env validation ───────────────────────────────────────────────────────────
 
 const { TOKEN, CLIENT_ID, GUILD_ID, PROXY_URL } = process.env;
-const YTDLP_BIN = process.env.YTDLP_PATH || 'yt-dlp';
+const YTDLP_BIN     = process.env.YTDLP_PATH    || 'yt-dlp';
+const YTDLP_COOKIES = process.env.YTDLP_COOKIES || null;
+
+// Build common yt-dlp base args (proxy + cookies when configured)
+function ytdlpBaseArgs() {
+    const args = [];
+    if (PROXY_URL)     args.push('--proxy',   PROXY_URL);
+    if (YTDLP_COOKIES) args.push('--cookies', YTDLP_COOKIES);
+    return args;
+}
 
 if (!TOKEN || !CLIENT_ID || !GUILD_ID) {
     console.error('Erro: TOKEN, CLIENT_ID e GUILD_ID devem estar configurados no .env');
@@ -139,9 +148,9 @@ function getAudioStream(url) {
         '-f', 'bestaudio/best',
         '--no-playlist',
         '-o', '-',
+        ...ytdlpBaseArgs(),
+        url,
     ];
-    if (PROXY_URL) ytdlpArgs.push('--proxy', PROXY_URL);
-    ytdlpArgs.push(url);
 
     const ytdlp = spawn(YTDLP_BIN, ytdlpArgs, { stdio: ['ignore', 'pipe', 'ignore'] });
     ytdlp.on('error', () => {}); // ENOENT treated downstream via ffmpeg closing
@@ -183,11 +192,11 @@ function fetchPlaylistVideos(url) {
         const ytdlpArgs = [
             '--flat-playlist', '--dump-json', '--no-warnings',
             '--playlist-end', String(MAX_PLAYLIST_SONGS),
+            ...ytdlpBaseArgs(),
+            url,
         ];
-        if (PROXY_URL) ytdlpArgs.push('--proxy', PROXY_URL);
-        ytdlpArgs.push(url);
 
-        const ytdlp = spawn('yt-dlp', ytdlpArgs, { stdio: ['ignore', 'pipe', 'ignore'] });        ytdlp.on('error', (err) => reject(new Error(`yt-dlp não encontrado: ${err.message}`)));
+        const ytdlp = spawn(YTDLP_BIN, ytdlpArgs, { stdio: ['ignore', 'pipe', 'ignore'] });        ytdlp.on('error', (err) => reject(new Error(`yt-dlp não encontrado: ${err.message}`)));
         let buf = '';
         ytdlp.stdout.on('data', d => { buf += d; });
         ytdlp.on('close', (code) => {
