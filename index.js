@@ -17,7 +17,6 @@ const {
     entersState,
     StreamType,
 } = require('@discordjs/voice');
-const play = require('play-dl');
 const { spawn } = require('child_process');
 const ffmpegPath = require('ffmpeg-static');
 
@@ -47,7 +46,8 @@ if (!TOKEN || !CLIENT_ID || !GUILD_ID) {
     process.exit(1);
 }
 
-if (PROXY_URL) console.log(`[proxy] Usando proxy: ${PROXY_URL.replace(/:([^:@]+)@/, ':***@')}`);
+if (PROXY_URL)     console.log(`[proxy] Usando proxy: ${PROXY_URL.replace(/:([^:@]+)@/, ':***@')}`);
+if (YTDLP_COOKIES) console.log(`[cookies] Usando cookies: ${YTDLP_COOKIES}`);
 
 // ── Guild state ──────────────────────────────────────────────────────────────
 // Map<guildId, { connection, player, queue: Song[], current: Song|null, textChannel }>
@@ -196,11 +196,16 @@ function fetchPlaylistVideos(url) {
             url,
         ];
 
-        const ytdlp = spawn(YTDLP_BIN, ytdlpArgs, { stdio: ['ignore', 'pipe', 'ignore'] });        ytdlp.on('error', (err) => reject(new Error(`yt-dlp não encontrado: ${err.message}`)));
-        let buf = '';
+        const ytdlp = spawn(YTDLP_BIN, ytdlpArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
+        ytdlp.on('error', (err) => reject(new Error(`yt-dlp não encontrado: ${err.message}`)));
+        let buf = '', errBuf = '';
+        ytdlp.stderr.on('data', d => { errBuf += d; });
         ytdlp.stdout.on('data', d => { buf += d; });
         ytdlp.on('close', (code) => {
-            if (!buf && code !== 0) return reject(new Error('yt-dlp não conseguiu carregar a playlist.'));
+            if (!buf && code !== 0) {
+                const detail = errBuf.split('\n').find(l => l.includes('ERROR') || l.includes('Sign in')) ?? errBuf.trim().split('\n').pop() ?? '';
+                return reject(new Error(`yt-dlp não conseguiu carregar a playlist.${detail ? ' ' + detail : ''}`));
+            }
             const videos = buf.trim().split('\n').filter(Boolean).map(line => {
                 try {
                     const j = JSON.parse(line);
@@ -216,15 +221,73 @@ function fetchPlaylistVideos(url) {
     });
 }
 
+// Fetch single video info via yt-dlp
+function fetchVideoInfo(url) {
+    return new Promise((resolve, reject) => {
+        const args = [
+            '--dump-json', '--no-playlist', '--no-warnings',
+            ...ytdlpBaseArgs(),
+            url,
+        ];
+        const ytdlp = spawn(YTDLP_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+        ytdlp.on('error', (err) => reject(new Error(`yt-dlp não encontrado: ${err.message}`)));
+        let buf = '', errBuf = '';
+        ytdlp.stderr.on('data', d => { errBuf += d; });
+        ytdlp.stdout.on('data', d => { buf += d; });
+        ytdlp.on('close', (code) => {
+            if (code !== 0 || !buf) {
+                const detail = errBuf.split('\n').find(l => l.includes('ERROR') || l.includes('Sign in')) ?? errBuf.trim().split('\n').pop() ?? '';
+                return reject(new Error(`Não foi possível obter informações do vídeo.${detail ? ' ' + detail : ''}`));
+            }
+            try {
+                const j = JSON.parse(buf.trim().split('\n')[0]);
+                resolve({
+                    url:       `https://www.youtube.com/watch?v=${j.id}`,
+                    title:     j.title ?? j.id,
+                    thumbnail: j.thumbnail ?? null,
+                });
+            } catch { reject(new Error('Erro ao processar informações do vídeo.')); }
+        });
+    });
+}
+
+// Search YouTube via yt-dlp
+function searchVideo(query) {
+    return new Promise((resolve, reject) => {
+        const args = [
+            `ytsearch1:${query}`,
+            '--dump-json', '--no-playlist', '--no-warnings',
+            ...ytdlpBaseArgs(),
+        ];
+        const ytdlp = spawn(YTDLP_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+        ytdlp.on('error', (err) => reject(new Error(`yt-dlp não encontrado: ${err.message}`)));
+        let buf = '', errBuf = '';
+        ytdlp.stderr.on('data', d => { errBuf += d; });
+        ytdlp.stdout.on('data', d => { buf += d; });
+        ytdlp.on('close', (code) => {
+            if (code !== 0 || !buf) {
+                const detail = errBuf.split('\n').find(l => l.includes('ERROR') || l.includes('Sign in')) ?? errBuf.trim().split('\n').pop() ?? '';
+                return reject(new Error(`Nenhum resultado para "${query}".${detail ? ' ' + detail : ''}`));
+            }
+            try {
+                const j = JSON.parse(buf.trim().split('\n')[0]);
+                resolve({
+                    url:       `https://www.youtube.com/watch?v=${j.id}`,
+                    title:     j.title ?? j.id,
+                    thumbnail: j.thumbnail ?? null,
+                });
+            } catch { reject(new Error('Erro ao processar resultado da busca.')); }
+        });
+    });
+}
+
 async function resolve(input) {
     if (!input) throw new Error('Nenhuma entrada fornecida.');
 
     // Not a URL → search YouTube
     if (!input.startsWith('http')) {
-        const results = await play.search(input, { source: { youtube: 'video' }, limit: 1 });
-        if (!results.length) throw new Error(`Nenhum resultado para "${input}"`);
-        const v = results[0];
-        return { isPlaylist: false, url: v.url, title: v.title, thumbnail: v.thumbnails?.[0]?.url ?? null };
+        const video = await searchVideo(input);
+        return { isPlaylist: false, ...video };
     }
 
     const hasListParam = /[?&]list=/.test(input);
@@ -233,7 +296,6 @@ async function resolve(input) {
     if (hasListParam) {
         const videos = await fetchPlaylistVideos(input);
         if (videos.length === 0) throw new Error('Playlist/mix sem vídeos acessíveis.');
-        // Use the first video title as a fallback playlist name
         const listId = input.match(/list=([^&]+)/)?.[1] ?? 'Mix';
         const playlistTitle = listId.startsWith('RD') ? `Mix: ${videos[0].title}` : listId;
         return { isPlaylist: true, title: playlistTitle, videos };
@@ -243,9 +305,8 @@ async function resolve(input) {
     const videoIdMatch = input.match(/(?:v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
     if (videoIdMatch) {
         const cleanUrl = `https://www.youtube.com/watch?v=${videoIdMatch[1]}`;
-        const info = await play.video_info(cleanUrl);
-        const d    = info.video_details;
-        return { isPlaylist: false, url: d.url, title: d.title, thumbnail: d.thumbnails?.[0]?.url ?? null };
+        const video = await fetchVideoInfo(cleanUrl);
+        return { isPlaylist: false, ...video };
     }
 
     throw new Error('Apenas links do YouTube ou nomes de músicas são suportados.');
@@ -299,6 +360,9 @@ client.once('clientReady', async () => {
 
 client.on('interactionCreate', async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
+
+    // Ignore stale interactions redelivered after bot restart
+    if (interaction.replied || interaction.deferred) return;
 
     const { commandName, member, guild } = interaction;
 
